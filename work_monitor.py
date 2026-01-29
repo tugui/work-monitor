@@ -159,7 +159,7 @@ class NotificationWindow(QWidget):
 
     def init_ui(self):
         # 1. 扩大弹窗尺寸以容纳大字号
-        self.setFixedSize(500, 191)
+        self.setFixedSize(1000, 382)
         layout = QVBoxLayout()
         layout.setContentsMargins(30, 20, 30, 20)  # 增加内边距
 
@@ -172,9 +172,9 @@ class NotificationWindow(QWidget):
         )
 
         msg = (
-            "您已工作很久了，请务必休息！"
+            "您已工作很久了，\n请务必休息！"
             if self.is_repeat
-            else "您已连续工作一段时间，\n该休息一下了！"
+            else "您已工作一段时间，\n该休息一下了！"
         )
         message = QLabel(msg)
         # 优化文字显示，防止折断
