@@ -4,5 +4,5 @@ Execute the install command from the project root directory, then double-click d
 
 ```bash
 # intall
-./build_windows.bat
+build_windows.bat
 ```

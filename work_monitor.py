@@ -24,7 +24,6 @@ from PyQt5.QtWidgets import (
 
 
 class SettingsDialog(QDialog):
-    # ... (SettingsDialog 类保持不变，节省篇幅)
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
@@ -149,19 +148,20 @@ class SettingsDialog(QDialog):
 class NotificationWindow(QWidget):
     def __init__(self, screen, is_repeat=False):
         super().__init__()
-        self.screen = screen  # 指定弹出的屏幕
+        self.screen = screen
         self.is_repeat = is_repeat
         self.setWindowFlags(
             Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
+        # 鼠标悬停时显示手型光标，提示可点击
+        self.setCursor(Qt.PointingHandCursor)
         self.init_ui()
 
     def init_ui(self):
-        # 1. 扩大弹窗尺寸以容纳大字号
         self.setFixedSize(1000, 382)
         layout = QVBoxLayout()
-        layout.setContentsMargins(30, 20, 30, 20)  # 增加内边距
+        layout.setContentsMargins(30, 20, 30, 20)
 
         title_text = "⚠️ 仍在加班" if self.is_repeat else "🕐 休息提醒"
         title = QLabel(title_text)
@@ -177,29 +177,38 @@ class NotificationWindow(QWidget):
             else "您已工作一段时间，\n该休息一下了！"
         )
         message = QLabel(msg)
-        # 优化文字显示，防止折断
         message.setStyleSheet(
             "font-size: 32px; color: #34495e; font-family: 'Microsoft YaHei';"
         )
         message.setWordWrap(True)
         message.setAlignment(Qt.AlignCenter)
 
+        # 点击提示文字
+        hint = QLabel("点击此处关闭")
+        hint.setStyleSheet("font-size: 14px; color: #95a5a6;")
+        hint.setAlignment(Qt.AlignRight)
+
         layout.addWidget(title)
-        layout.addStretch()  # 增加间距
+        layout.addStretch()
         layout.addWidget(message)
         layout.addStretch()
+        layout.addWidget(hint)
         self.setLayout(layout)
 
-        # 2. 修改定位逻辑，使其可以在不同屏幕的右下角弹出
         geom = self.screen.availableGeometry()
         x = geom.x() + geom.width() - self.width() - 20
         y = geom.y() + geom.height() - self.height() - 60
         self.move(x, y)
 
+    def mousePressEvent(self, event):
+        """点击弹窗任意位置即可关闭"""
+        if event.button() == Qt.LeftButton:
+            self.close()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.setBrush(QColor(255, 255, 255, 252))  # 稍微提高不透明度
+        painter.setBrush(QColor(255, 255, 255, 252))
         border_color = QColor(231, 76, 60) if self.is_repeat else QColor(52, 152, 219)
         painter.setPen(border_color)
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 15, 15)
@@ -207,7 +216,6 @@ class NotificationWindow(QWidget):
 
 class WorkMonitor(QSystemTrayIcon):
     def __init__(self, app):
-        # ... (图标初始化部分保持不变)
         pixmap = QPixmap(64, 64)
         pixmap.fill(Qt.transparent)
         painter = QPainter(pixmap)
@@ -303,13 +311,11 @@ class WorkMonitor(QSystemTrayIcon):
         self.is_reminded = True
         self.repeat_seconds = 0
 
-        # 3. 核心修改：获取所有屏幕并弹出窗体
         screens = QGuiApplication.screens()
         for screen in screens:
             notif = NotificationWindow(screen, is_repeat=is_repeat)
             notif.show()
             self.current_notifs.append(notif)
-            # 增加停留时间到30秒 (30000 毫秒)
             QTimer.singleShot(30000, lambda n=notif: self.close_notif(n))
 
     def reset_counters(self):
