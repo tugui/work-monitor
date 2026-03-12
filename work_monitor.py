@@ -22,17 +22,20 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+SETTINGS_FILE = "work_monitor_settings.json"
+
 
 class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
         self.setWindowTitle("工作监控设置")
-        self.setFixedWidth(350)
+        self.setFixedWidth(360)
         self.init_ui()
 
     def init_ui(self):
         layout = QVBoxLayout()
+
         work_layout = QHBoxLayout()
         work_layout.addWidget(QLabel("连续工作时长(分钟):"))
         self.work_duration = QSpinBox()
@@ -48,6 +51,16 @@ class SettingsDialog(QDialog):
         self.repeat_interval.setValue(self.settings.get("repeat_interval", 30))
         repeat_layout.addWidget(self.repeat_interval)
         layout.addLayout(repeat_layout)
+
+        eye_layout = QHBoxLayout()
+        eye_layout.addWidget(QLabel("护眼提醒(分钟):"))
+        self.eye_reminder_interval = QSpinBox()
+        self.eye_reminder_interval.setRange(10, 180)
+        self.eye_reminder_interval.setValue(
+            self.settings.get("eye_reminder_interval", 30)
+        )
+        eye_layout.addWidget(self.eye_reminder_interval)
+        layout.addLayout(eye_layout)
 
         idle_layout = QHBoxLayout()
         idle_layout.addWidget(QLabel("空闲判定时间(秒):"))
@@ -84,14 +97,17 @@ class SettingsDialog(QDialog):
         btn_layout.addWidget(save_btn)
         btn_layout.addWidget(cancel_btn)
         layout.addLayout(btn_layout)
+
         self.setLayout(layout)
 
     def save_settings(self):
         self.settings["work_duration"] = self.work_duration.value()
         self.settings["repeat_interval"] = self.repeat_interval.value()
+        self.settings["eye_reminder_interval"] = self.eye_reminder_interval.value()
         self.settings["idle_time"] = self.idle_time.value()
         self.settings["start_time"] = self.start_time.time().toString("HH:mm")
         self.settings["end_time"] = self.end_time.time().toString("HH:mm")
+
         if self.autostart_checkbox.isChecked():
             self.enable_autostart()
         else:
@@ -111,7 +127,7 @@ class SettingsDialog(QDialog):
                 )
                 winreg.QueryValueEx(key, "WorkMonitor")
                 return True
-            except:
+            except Exception:
                 return False
         return False
 
@@ -141,20 +157,29 @@ class SettingsDialog(QDialog):
                     winreg.KEY_WRITE,
                 )
                 winreg.DeleteValue(key, "WorkMonitor")
-            except:
+            except Exception:
                 pass
 
 
 class NotificationWindow(QWidget):
-    def __init__(self, screen, is_repeat=False):
+    def __init__(
+        self,
+        screen,
+        notif_type="rest",
+        is_repeat=False,
+        stack_index=0,
+        stack_spacing=16,
+    ):
         super().__init__()
         self.screen = screen
+        self.notif_type = notif_type
         self.is_repeat = is_repeat
+        self.stack_index = stack_index
+        self.stack_spacing = stack_spacing
         self.setWindowFlags(
             Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
-        # 鼠标悬停时显示手型光标，提示可点击
         self.setCursor(Qt.PointingHandCursor)
         self.init_ui()
 
@@ -163,19 +188,26 @@ class NotificationWindow(QWidget):
         layout = QVBoxLayout()
         layout.setContentsMargins(30, 20, 30, 20)
 
-        title_text = "⚠️ 仍在加班" if self.is_repeat else "🕐 休息提醒"
-        title = QLabel(title_text)
-        title.setStyleSheet(
-            "font-size: 32px; font-weight: bold; color: #e74c3c;"
-            if self.is_repeat
-            else "font-size: 32px; font-weight: bold; color: #2c3e50;"
-        )
+        if self.notif_type == "eye":
+            title_text = "🕐 护眼提醒"
+            title_style = "font-size: 32px; font-weight: bold; color: #16a085;"
+            msg = "请每隔一段时间休息一下，\n看看远处，放松眼睛！"
+        else:
+            title_text = "⚠️ 仍在加班"
+            title_style = (
+                "font-size: 32px; font-weight: bold; color: #e74c3c;"
+                if self.is_repeat
+                else "font-size: 32px; font-weight: bold; color: #2c3e50;"
+            )
+            msg = (
+                "您已工作很久了，\n请务必休息！"
+                if self.is_repeat
+                else "您已工作一段时间，\n该休息一下了！"
+            )
 
-        msg = (
-            "您已工作很久了，\n请务必休息！"
-            if self.is_repeat
-            else "您已工作一段时间，\n该休息一下了！"
-        )
+        title = QLabel(title_text)
+        title.setStyleSheet(title_style)
+
         message = QLabel(msg)
         message.setStyleSheet(
             "font-size: 32px; color: #34495e; font-family: 'Microsoft YaHei';"
@@ -183,7 +215,6 @@ class NotificationWindow(QWidget):
         message.setWordWrap(True)
         message.setAlignment(Qt.AlignCenter)
 
-        # 点击提示文字
         hint = QLabel("点击此处关闭")
         hint.setStyleSheet("font-size: 14px; color: #95a5a6;")
         hint.setAlignment(Qt.AlignRight)
@@ -198,10 +229,10 @@ class NotificationWindow(QWidget):
         geom = self.screen.availableGeometry()
         x = geom.x() + geom.width() - self.width() - 20
         y = geom.y() + geom.height() - self.height() - 60
+        y -= self.stack_index * (self.height() + self.stack_spacing)
         self.move(x, y)
 
     def mousePressEvent(self, event):
-        """点击弹窗任意位置即可关闭"""
         if event.button() == Qt.LeftButton:
             self.close()
 
@@ -209,7 +240,14 @@ class NotificationWindow(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setBrush(QColor(255, 255, 255, 252))
-        border_color = QColor(231, 76, 60) if self.is_repeat else QColor(52, 152, 219)
+
+        if self.notif_type == "eye":
+            border_color = QColor(22, 160, 133)
+        else:
+            border_color = (
+                QColor(231, 76, 60) if self.is_repeat else QColor(52, 152, 219)
+            )
+
         painter.setPen(border_color)
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 15, 15)
 
@@ -218,6 +256,7 @@ class WorkMonitor(QSystemTrayIcon):
     def __init__(self, app):
         pixmap = QPixmap(64, 64)
         pixmap.fill(Qt.transparent)
+
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setBrush(QColor(52, 152, 219))
@@ -236,6 +275,7 @@ class WorkMonitor(QSystemTrayIcon):
         self.settings = self.load_settings()
         self.work_seconds = 0
         self.repeat_seconds = 0
+        self.eye_reminder_seconds = 0
         self.is_reminded = False
         self.last_activity = datetime.now()
         self.current_notifs = []
@@ -257,24 +297,31 @@ class WorkMonitor(QSystemTrayIcon):
 
     def load_settings(self):
         try:
-            with open("work_monitor_settings.json", "r") as f:
-                return json.load(f)
-        except:
-            return {
-                "work_duration": 45,
-                "repeat_interval": 30,
-                "idle_time": 180,
-                "start_time": "09:00",
-                "end_time": "17:30",
-            }
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+        except Exception:
+            settings = {}
+
+        defaults = {
+            "work_duration": 45,
+            "repeat_interval": 30,
+            "eye_reminder_interval": 30,
+            "idle_time": 180,
+            "start_time": "09:00",
+            "end_time": "17:30",
+        }
+        defaults.update(settings)
+        return defaults
 
     def setup_listeners(self):
-        def on_act(*a):
+        def on_activity(*_):
             self.last_activity = datetime.now()
 
-        self.m_l = mouse.Listener(on_move=on_act, on_click=on_act, on_scroll=on_act)
+        self.m_l = mouse.Listener(
+            on_move=on_activity, on_click=on_activity, on_scroll=on_activity
+        )
         self.m_l.start()
-        self.k_l = keyboard.Listener(on_press=on_act)
+        self.k_l = keyboard.Listener(on_press=on_activity)
         self.k_l.start()
 
     def check_work_status(self):
@@ -288,57 +335,85 @@ class WorkMonitor(QSystemTrayIcon):
             return
 
         idle_sec = (datetime.now() - self.last_activity).total_seconds()
-
-        if idle_sec < self.settings["idle_time"]:
-            if not self.is_reminded:
-                self.work_seconds += 1
-                self.status_action.setText(
-                    f"状态: 工作中 ({self.work_seconds // 60}min)"
-                )
-                if self.work_seconds >= self.settings["work_duration"] * 60:
-                    self.trigger_alert(is_repeat=False)
-            else:
-                self.repeat_seconds += 1
-                rem_min = self.settings["repeat_interval"] - (self.repeat_seconds // 60)
-                self.status_action.setText(f"状态: 建议休息 (再次提醒: {rem_min}min)")
-                if self.repeat_seconds >= self.settings["repeat_interval"] * 60:
-                    self.trigger_alert(is_repeat=True)
-        else:
+        if idle_sec >= self.settings["idle_time"]:
             self.reset_counters()
             self.status_action.setText("状态: 休息中")
+            return
+
+        self.eye_reminder_seconds += 1
+        eye_due = (
+            self.eye_reminder_seconds >= self.settings["eye_reminder_interval"] * 60
+        )
+
+        if not self.is_reminded:
+            self.work_seconds += 1
+            self.status_action.setText(f"状态: 工作中 ({self.work_seconds // 60}min)")
+            rest_due = self.work_seconds >= self.settings["work_duration"] * 60
+        else:
+            self.repeat_seconds += 1
+            rem_min = self.settings["repeat_interval"] - (self.repeat_seconds // 60)
+            rem_min = max(rem_min, 0)
+            self.status_action.setText(f"状态: 建议休息 (再次提醒: {rem_min}min)")
+            rest_due = self.repeat_seconds >= self.settings["repeat_interval"] * 60
+
+        if rest_due or eye_due:
+            notif_specs = []
+            if rest_due:
+                notif_specs.append({"type": "rest", "is_repeat": self.is_reminded})
+            if eye_due:
+                notif_specs.append({"type": "eye"})
+            self.show_notifications(notif_specs)
+
+            if rest_due:
+                self.is_reminded = True
+                self.repeat_seconds = 0
+            if eye_due:
+                self.eye_reminder_seconds = 0
 
     def trigger_alert(self, is_repeat=False):
         self.is_reminded = True
         self.repeat_seconds = 0
+        self.show_notifications([{"type": "rest", "is_repeat": is_repeat}])
 
-        screens = QGuiApplication.screens()
-        for screen in screens:
-            notif = NotificationWindow(screen, is_repeat=is_repeat)
-            notif.show()
-            self.current_notifs.append(notif)
-            QTimer.singleShot(30000, lambda n=notif: self.close_notif(n))
+    def trigger_eye_alert(self):
+        self.show_notifications([{"type": "eye"}])
+
+    def show_notifications(self, notif_specs):
+        for screen in QGuiApplication.screens():
+            for idx, spec in enumerate(notif_specs):
+                notif = NotificationWindow(
+                    screen,
+                    notif_type=spec.get("type", "rest"),
+                    is_repeat=spec.get("is_repeat", False),
+                    stack_index=idx,
+                    stack_spacing=16,
+                )
+                notif.show()
+                self.current_notifs.append(notif)
+                QTimer.singleShot(30000, lambda n=notif: self.close_notif(n))
 
     def reset_counters(self):
         self.work_seconds = 0
         self.repeat_seconds = 0
+        self.eye_reminder_seconds = 0
         self.is_reminded = False
 
-    def close_notif(self, n):
+    def close_notif(self, notif):
         try:
-            n.close()
-            if n in self.current_notifs:
-                self.current_notifs.remove(n)
-        except:
+            notif.close()
+            if notif in self.current_notifs:
+                self.current_notifs.remove(notif)
+        except Exception:
             pass
 
     def show_settings(self):
         if SettingsDialog(self.settings).exec_():
-            with open("work_monitor_settings.json", "w") as f:
-                json.dump(self.settings, f)
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.settings, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
-    m = WorkMonitor(app)
+    monitor = WorkMonitor(app)
     sys.exit(app.exec_())
