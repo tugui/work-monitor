@@ -65,8 +65,8 @@ class SettingsDialog(QDialog):
         idle_layout = QHBoxLayout()
         idle_layout.addWidget(QLabel("空闲判定时间(秒):"))
         self.idle_time = QSpinBox()
-        self.idle_time.setRange(10, 300)
-        self.idle_time.setValue(self.settings.get("idle_time", 180))
+        self.idle_time.setRange(10, 600)
+        self.idle_time.setValue(self.settings.get("idle_time", 300))
         idle_layout.addWidget(self.idle_time)
         layout.addLayout(idle_layout)
 
@@ -226,10 +226,19 @@ class NotificationWindow(QWidget):
         layout.addWidget(hint)
         self.setLayout(layout)
 
+        self._position_window()
+
+    def _position_window(self):
         geom = self.screen.availableGeometry()
         x = geom.x() + geom.width() - self.width() - 20
-        y = geom.y() + geom.height() - self.height() - 60
-        y -= self.stack_index * (self.height() + self.stack_spacing)
+        # 从屏幕底部向上堆叠：stack_index=0 最靠下，每增加一层向上偏移
+        y = (
+            geom.y()
+            + geom.height()
+            - self.height()
+            - 60
+            - self.stack_index * (self.height() + self.stack_spacing)
+        )
         self.move(x, y)
 
     def mousePressEvent(self, event):
@@ -273,12 +282,21 @@ class WorkMonitor(QSystemTrayIcon):
         super().__init__(QIcon(pixmap), app)
         self.app = app
         self.settings = self.load_settings()
+
+        # 工作计时：累计活跃秒数，空闲时暂停（不清零），需要主动休息才清零
         self.work_seconds = 0
         self.repeat_seconds = 0
+
+        # 护眼计时：只在护眼通知弹出后才清零，空闲/休息均不重置
+        # 这样即使用户频繁短暂休息，护眼提醒仍会按设定间隔触发
         self.eye_reminder_seconds = 0
+
         self.is_reminded = False
         self.last_activity = datetime.now()
-        self.current_notifs = []
+
+        # 当前屏幕上每个屏幕的活跃通知列表，用于计算堆叠位置
+        # key: screen serial/handle, value: list of NotificationWindow
+        self.screen_notifs: dict[int, list[NotificationWindow]] = {}
 
         self.init_menu()
         self.timer = QTimer()
@@ -306,7 +324,9 @@ class WorkMonitor(QSystemTrayIcon):
             "work_duration": 45,
             "repeat_interval": 30,
             "eye_reminder_interval": 30,
-            "idle_time": 180,
+            # 默认空闲判定时间调整为 300 秒（5 分钟），
+            # 避免读文档/看视频等无鼠标键盘操作的场景误判为空闲
+            "idle_time": 300,
             "start_time": "09:00",
             "end_time": "17:30",
         }
@@ -317,6 +337,7 @@ class WorkMonitor(QSystemTrayIcon):
         def on_activity(*_):
             self.last_activity = datetime.now()
 
+        # 鼠标移动/点击/滚轮、键盘按键均视为活跃
         self.m_l = mouse.Listener(
             on_move=on_activity, on_click=on_activity, on_scroll=on_activity
         )
@@ -331,15 +352,22 @@ class WorkMonitor(QSystemTrayIcon):
 
         if not (start <= now <= end):
             self.status_action.setText("状态: 非工作时间")
-            self.reset_counters()
+            self.reset_work_counters()
             return
 
         idle_sec = (datetime.now() - self.last_activity).total_seconds()
-        if idle_sec >= self.settings["idle_time"]:
-            self.reset_counters()
+        is_idle = idle_sec >= self.settings["idle_time"]
+
+        if is_idle:
+            # 空闲/主动休息：重置工作计时，但【不重置护眼计时】
+            # 护眼提醒与是否在休息无关，只跟"距上次护眼提醒过了多久"有关
+            self.reset_work_counters()
             self.status_action.setText("状态: 休息中")
             return
 
+        # ---- 活跃状态 ----
+
+        # 护眼计时无论工作/提醒状态都持续累加，只有护眼通知弹出后才归零
         self.eye_reminder_seconds += 1
         eye_due = (
             self.eye_reminder_seconds >= self.settings["eye_reminder_interval"] * 60
@@ -379,32 +407,46 @@ class WorkMonitor(QSystemTrayIcon):
         self.show_notifications([{"type": "eye"}])
 
     def show_notifications(self, notif_specs):
+        """
+        在所有屏幕上弹出通知，纵向堆叠。
+        堆叠基准：已有的活跃通知数量，新通知显示在其上方。
+        """
         for screen in QGuiApplication.screens():
-            for idx, spec in enumerate(notif_specs):
+            screen_id = id(screen)
+            # 清理已关闭的通知引用
+            active = [n for n in self.screen_notifs.get(screen_id, []) if n.isVisible()]
+            self.screen_notifs[screen_id] = active
+
+            for spec in notif_specs:
+                stack_index = len(self.screen_notifs[screen_id])
                 notif = NotificationWindow(
                     screen,
                     notif_type=spec.get("type", "rest"),
                     is_repeat=spec.get("is_repeat", False),
-                    stack_index=idx,
+                    stack_index=stack_index,
                     stack_spacing=16,
                 )
                 notif.show()
-                self.current_notifs.append(notif)
-                QTimer.singleShot(30000, lambda n=notif: self.close_notif(n))
+                self.screen_notifs[screen_id].append(notif)
+                # 30 秒后自动关闭
+                QTimer.singleShot(
+                    30000, lambda n=notif, sid=screen_id: self.close_notif(n, sid)
+                )
 
-    def reset_counters(self):
+    def reset_work_counters(self):
         self.work_seconds = 0
         self.repeat_seconds = 0
         self.eye_reminder_seconds = 0
         self.is_reminded = False
 
-    def close_notif(self, notif):
+    def close_notif(self, notif, screen_id):
         try:
             notif.close()
-            if notif in self.current_notifs:
-                self.current_notifs.remove(notif)
         except Exception:
             pass
+        notifs = self.screen_notifs.get(screen_id, [])
+        if notif in notifs:
+            notifs.remove(notif)
 
     def show_settings(self):
         if SettingsDialog(self.settings).exec_():
